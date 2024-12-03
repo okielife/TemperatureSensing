@@ -1,0 +1,27 @@
+HOME_WIFI_SSID="EmeraldWifi"
+HOME_WIFI_PASSWORD="rejoice27"
+PANTRY_CIRCUITPY_WIFI_SSID="ATTIzFd84I"
+PANTRY_CIRCUITPY_WIFI_PASSWORD="cwe58reb4j8i"
+WIFI_SSID="EmeraldWiFi"
+WIFI_PASSWORD="rejoice27"
+TOKEN_URL="https://raw.githubusercontent.com/okielife/TempSensors/nekot/nekot"
+
+SENSOR_00="Sensor_Name_From_List_Below:GP18"
+
+KNOWN_SENSOR_IDS=[
+    "Must match the config in https://github.com/okielife/TempSensors/blob/main/_data/config.json",
+    "Emerald_Garage_Fridge",
+    "Emerald_Garage_Freezer",
+    "Pantry_Garage_Freezer",
+    "Pantry_South_Room_Top_Bottom_Freezer",
+    "Pantry_South_Room_Top_Bottom_Fridge",
+    "Pantry_Dining_Deep_Freezer",
+    "Pantry_Standing_Freezer_East",
+    "Pantry_Standing_Freezer_West",
+    "Pantry_Entry_Top_Bottom_Fridge",
+    "Pantry_Entry_Side_By_Side_Freezer",
+    "Pantry_Entry_Side_By_Side_Fridge",
+    "Pantry_West_Standing_Freezer",
+    "Emerald_Kitchen_Freezer",
+    "Emerald_Kitchen_Fridge"
+  ]

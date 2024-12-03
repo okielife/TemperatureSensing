@@ -1,0 +1,30 @@
+name: Exercise
+
+on:
+  push
+
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      id: setup-python
+      uses: actions/setup-python@v2
+      with:
+        python-version: 3.12
+
+    - name: Install Python Dependencies
+      run: pip install -r requirements.txt
+
+    - name: Run Tests
+      run: pytest
+
+    - name: Lint the code
+      run: flake8 sensing
