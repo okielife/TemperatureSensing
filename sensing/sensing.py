@@ -198,8 +198,8 @@ measurement_time: {current}
     data = {'message': f"Updating {file_path}", 'content': encoded_content}
     try:
         response = https.put(url, headers=headers, data=dumps(data))
-    except (RuntimeError, OSError):
-        my_print(clock, "Could not send request, skipping this report, checks will continue")
+    except (RuntimeError, OSError) as e:
+        my_print(clock, f"Could not send request, reason={e}\n, skipping this report, checks will continue")
         return
     if response.status_code in (200, 201):
         my_print(clock, "PUT Complete: File created/updated successfully.")

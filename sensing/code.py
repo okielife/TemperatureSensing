@@ -18,5 +18,9 @@ if __name__ == "__main__":
             led.value = not led.value  # Toggle LED
             sleep(0.5)  # Adjust blink speed as needed
     else:  # No jumper, just run sensing.main(True) so that it sets up the watchdog to run autonomously
-        from sensing import main
-        main(set_watchdog=True)
+        try:
+            from sensing import main  # on the board, this is at the root, so no sensing.sensing needed
+            main(set_watchdog=True)
+        except ImportError:
+            from sensing.sensing import main  # locally, this is inside the sensing package, so nest it
+            main(set_watchdog=True)
