@@ -1,7 +1,7 @@
 # CircuitPython library imports
 try:
     from board_definitions import raspberry_pi_pico_w as board
-except ImportError:
+except ImportError:  # pragma: no cover
     # noinspection PyPackageRequirements
     import board  # import this whole thing so we can search for symbols on it
 from binascii import b2a_base64
@@ -10,6 +10,7 @@ from json import dumps
 from os import getenv
 # noinspection PyPackageRequirements
 from rtc import RTC
+from ssl import SSLContext
 from struct import unpack_from
 from sys import exit
 from time import localtime, sleep
@@ -36,6 +37,9 @@ class Sensor:
         self.set_extra_hot_ports()
         self.test_mode = False
         self.verbose = True
+        self.success = False
+
+    def run_once(self):
         try:
             clock = RTC()
             pool, requests = self.init_connection_variables()
@@ -45,15 +49,13 @@ class Sensor:
             self.warm_up_temperature_sensors(sensors, clock)
             self.report_all_sensors(requests, clock, sensors)
             self.success = True
-        except KeyboardInterrupt:
+        # not covering all of these exceptions in unit test coverage, each function is tested separately
+        except KeyboardInterrupt:  # pragma: no cover
             self.print("Encountered keyboard interrupt, exiting")
-            self.success = False
-        except ConnectionError as e:
+        except ConnectionError as e:  # pragma: no cover
             self.print(f"Could not find network with that SSID or failed to connect: {e}")
-            self.success = False
         except Exception as e:
             self.print(f"Unexpected error in run() function, reason: {e}")
-            self.success = False
 
     def print(self, message: str, clock: RTC = None) -> None:
         if clock:
@@ -73,12 +75,12 @@ class Sensor:
         sleep(1)
 
     @staticmethod
-    def github_token(requests: Session) -> str:
-        github_token_url = getenv('TOKEN_URL')
-        response = requests.get(github_token_url)
-        content = response.content.decode('utf-8')
-        github_token = ''.join(reversed(content.replace('\n', '')))
-        return github_token
+    def init_connection_variables() -> [SocketpoolModuleType, Session]:
+        # Initialize Wi-Fi, Socket Pool, Request Session
+        pool: SocketpoolModuleType = get_radio_socketpool(radio)
+        ssl_context: SSLContext = get_radio_ssl_context(radio)
+        requests: Session = Session(pool, ssl_context)
+        return pool, requests
 
     def connect_to_wifi(self) -> None:
         if radio.ipv4_address:
@@ -103,12 +105,14 @@ class Sensor:
             sleep(2)
 
     @staticmethod
-    def init_connection_variables() -> [SocketpoolModuleType, Session]:
-        # Initialize Wi-Fi, Socket Pool, Request Session
-        pool: SocketpoolModuleType = get_radio_socketpool(radio)
-        ssl_context = get_radio_ssl_context(radio)
-        requests = Session(pool, ssl_context)
-        return pool, requests
+    def github_token(requests: Session) -> str:
+        github_token_url = getenv('TOKEN_URL')
+        if not github_token_url:
+            raise RuntimeError("TOKEN_URL environment variable not set")
+        response = requests.get(github_token_url)
+        content = response.content.decode('utf-8')
+        github_token = ''.join(reversed(content.replace('\n', '')))
+        return github_token
 
     @staticmethod
     def set_extra_hot_ports() -> None:
@@ -117,7 +121,8 @@ class Sensor:
         if extra_hots_string:
             for extra_hot in extra_hots_string.split(","):
                 pin = getattr(board, extra_hot)
-                DigitalInOut(pin).switch_to_output(value=True)
+                p = DigitalInOut(pin)
+                p.switch_to_output(value=True)
 
     def set_clock_to_cst(self, pool: SocketpoolModuleType, clock: RTC) -> None:
         while True:
@@ -136,10 +141,10 @@ class Sensor:
                 clock.datetime = localtime(time_int)
                 self.print(f"Pico time set to CST: {clock.datetime}", clock)
                 return
-            except OSError:
-                self.print("Encountered a connection error trying to set time, will try again", clock)
-            except ArithmeticError:
-                self.print("Encountered a math error, must be invalid time calculation, retrying", clock)
+            except Exception as e:  # pragma: no cover
+                # I tried _really_ hard to get this exception.  It's difficult because of the way I am using mock
+                # classes, so it's tough to override things later.  Probably worth revisiting later
+                self.print(f"Encountered an error trying to set time, will try again: {e}", clock)
 
     def get_gpio_port_instance(self, clock: RTC, port_name: str):  # should be returning a Pin
         self.print(f"Attempting to look up pin `{port_name}` in the board module", clock)
@@ -164,7 +169,8 @@ class Sensor:
             self.print(f"Parsed: ID: {sensor_id}; Looking up the port as {gpio_port_name}", clock)
             port_var = self.get_gpio_port_instance(clock, gpio_port_name)
             self.print(f"Got a port name as: {sensor_id}, constructing sensor object", clock)
-            if self.test_mode:
+            if self.test_mode:  # pragma: no cover
+                # not planning on testing this little test mode class
                 class DummySensor:
                     temperature = -10.0
                 sensors[sensor_id] = DummySensor()
@@ -180,7 +186,7 @@ class Sensor:
                     self.print(f"Successfully constructed sensor {sensor_id} on port {port_var}", clock)
                     sensors[sensor_id] = sensor
                 else:
-                    self.print(f"Could not construct sensor {sensor_id} on port {port_var}; skipping", clock)
+                    raise RuntimeError(f"Could not construct sensor {sensor_id} on port {port_var}", clock)
         self.print(f"All sensors found: {[x for x in sensors]}", clock)
         return sensors
 
@@ -190,7 +196,7 @@ class Sensor:
             sleep(1)
             self.print(f"Sensor ID {sensor_id} New Temperature = {sensor_instance.temperature}", clock)
 
-    def report_single_sensor(self, clock: RTC, requests: Session, sensor_id: str, sensor: DS18X20, token: str) -> None:
+    def report_single_sensor(self, clock: RTC, requests: Session, sensor_id: str, sensor: DS18X20, token: str) -> bool:
         t = clock.datetime
         current = f"{t.tm_year}-{t.tm_mon:02d}-{t.tm_mday:02d}-{t.tm_hour:02d}-{t.tm_min:02d}-{t.tm_sec:02d}"
         file_content = f"""---
@@ -209,24 +215,31 @@ measurement_time: {current}
         try:
             response = requests.put(url, headers=headers, data=dumps(data))
         except (RuntimeError, OSError) as e:
-            self.print(f"Could not send request, reason={e}\n, skipping this report, checks will continue", clock)
-            return
+            self.print(f"Could not send request, reason={e}, skipping this report, checks will continue", clock)
+            return False
         if response.status_code in (200, 201):
             self.print("PUT Complete: File created/updated successfully.", clock)
+            return True
         else:
             self.print(f"PUT Error: {response.text}", clock)
+            return False
 
-    def report_all_sensors(self, requests: Session, clock: RTC, sensors: dict[str, DS18X20]) -> None:
+    def report_all_sensors(self, requests: Session, clock: RTC, sensors: dict[str, DS18X20]) -> bool:
         self.flash_led(4)
         token = self.github_token(requests)
+        complete_success = True
         for sensor_id, sensor_instance in sensors.items():
-            self.report_single_sensor(clock, requests, sensor_id, sensor_instance, token)
+            success = self.report_single_sensor(clock, requests, sensor_id, sensor_instance, token)
+            if not success:
+                complete_success = False
         self.flash_led(5)
+        return complete_success
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     # noinspection PyUnresolvedReferences
     led = DigitalInOut(board.LED)  # Built-in LED
     led.switch_to_output(value=True)
     s = Sensor(led)
+    s.run_once()
     exit(0 if s.success else 1)

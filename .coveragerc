@@ -1,0 +1,9 @@
+[run]
+source = sensing
+
+# ignore the code.py file which is intended to be an infinite loop resetting the hardware, could try to mock things up
+# ignore the copier.py file which is just a worker function to copy files to a pico, could try to mock it up later
+[report]
+omit =
+    */sensing/code.py
+    */sensing/copier.py

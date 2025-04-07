@@ -60,6 +60,7 @@ if supervisor.runtime.usb_connected:
 else:
     from sensing.sensing import Sensor  # locally, this is inside the sensing package, so nest it
     s = Sensor(led)
+    s.run_once()
     if s.success:  # success
         # during this time, we'll steadily blink the light 1s on and 1s off
         data_frequency_minutes = 40
