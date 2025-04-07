@@ -157,7 +157,7 @@ class Sensor:
         self.print("Attempting to get all sensors from env", clock)
         sensors_string = getenv("SENSORS")
         if not sensors_string:
-            raise RuntimeError(f"Environment variable 'SENSORS' not set")
+            raise RuntimeError("Environment variable 'SENSORS' not set")
         sensors_data = sensors_string.strip().split(";")
         for sensor_data in sensors_data:
             sensor_id, gpio_port_name = [x.strip() for x in sensor_data.split(',')]
@@ -230,4 +230,3 @@ if __name__ == "__main__":
     led.switch_to_output(value=True)
     s = Sensor(led)
     exit(0 if s.success else 1)
-

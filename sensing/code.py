@@ -83,4 +83,3 @@ else:
 
     # regardless of outcome, do a hardware reset to start all over
     reset()
-
