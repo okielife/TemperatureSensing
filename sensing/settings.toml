@@ -1,12 +1,8 @@
-HOME_WIFI_SSID="EmeraldWifi"
-HOME_WIFI_PASSWORD="rejoice27"
-PANTRY_CIRCUITPY_WIFI_SSID="MiFi8000-C1DE"
-PANTRY_CIRCUITPY_WIFI_PASSWORD="9df7061f"
-WIFI_SSID="MiFi8000-C1DE"
-WIFI_PASSWORD="9df7061f"
-TOKEN_URL="https://raw.githubusercontent.com/okielife/TempSensors/nekot/nekot"
+WIFI = "home,EmeraldWiFi,rejoice27;pantry,MiFi8000-C1DE,9df7061f"
+SENSORS = "Pantry_Standing_Freezer_East,GP5;Pantry_Standing_Freezer_West,GP13"
+EXTRA_HOTS="GP4,GP12"
 
-SENSOR_00="Sensor_Name_From_List_Below:GP18"
+TOKEN_URL="https://raw.githubusercontent.com/okielife/TempSensors/nekot/nekot"
 
 KNOWN_SENSOR_IDS=[
     "Must match the config in https://github.com/okielife/TempSensors/blob/main/_data/config.json",

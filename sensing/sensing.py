@@ -1,297 +1,233 @@
-# Python standard library imports
-import board  # import this whole thing so we can search for symbols on it
-from board import LED
+# CircuitPython library imports
+try:
+    from board_definitions import raspberry_pi_pico_w as board
+except ImportError:
+    # noinspection PyPackageRequirements
+    import board  # import this whole thing so we can search for symbols on it
 from binascii import b2a_base64
 from digitalio import DigitalInOut
-from gc import collect
 from json import dumps
-from microcontroller import watchdog
 from os import getenv
+# noinspection PyPackageRequirements
 from rtc import RTC
-from socketpool import SocketPool
-from ssl import create_default_context
-from time import localtime, sleep, struct_time, mktime
+from struct import unpack_from
+from sys import exit
+from time import localtime, sleep
+# noinspection PyPackageRequirements
 from wifi import radio
-from watchdog import WatchDogMode
 
 # Adafruit library imports
+from adafruit_connection_manager import get_radio_socketpool, get_radio_ssl_context
+try:
+    from adafruit_connection_manager import SocketpoolModuleType
+except ImportError:
+    # Copied this by tracing the definitions of SocketpoolModuleType...it's just a ModuleType I guess?
+    import sys
+    SocketpoolModuleType = type(sys)
 from adafruit_ds18x20 import DS18X20
 from adafruit_onewire.bus import OneWireBus
 from adafruit_requests import Session
 
-# if something goes wrong with the CIRCUITPY filesystem, just run
-# import storage
-# storage.erase_filesystem()
 
+class Sensor:
 
-# WIRING CONFIGURATION
-# Temperature Sensor RED TO Pico 3V3OUT
-# Temperature Sensor BLACK TO Pico GND
-# Temperature Sensor YELLOW TO Pico GPXX where GPXX is defined in the settings.toml file
-# Resistor (~4.7k) CONNECTS EACH Temperature Sensor RED AND Temperature Sensor YELLOW
-# When plugging this into the computer for development or debugging, you'll want to use a jumper to cross
-#  GP0 with GND.  This will skip running the program automatically to avoid behavioral issues.
+    def __init__(self, _led: DigitalInOut):
+        self.led = _led
+        self.set_extra_hot_ports()
+        self.test_mode = False
+        self.verbose = True
+        try:
+            clock = RTC()
+            pool, requests = self.init_connection_variables()
+            self.connect_to_wifi()
+            self.set_clock_to_cst(pool, clock)
+            sensors = self.get_all_sensors_from_env(clock)
+            self.warm_up_temperature_sensors(sensors, clock)
+            self.report_all_sensors(requests, clock, sensors)
+            self.success = True
+        except KeyboardInterrupt:
+            self.print("Encountered keyboard interrupt, exiting")
+            self.success = False
+        except ConnectionError as e:
+            self.print(f"Could not find network with that SSID or failed to connect: {e}")
+            self.success = False
+        except Exception as e:
+            self.print(f"Unexpected error in run() function, reason: {e}")
+            self.success = False
 
-# BOOT PROCESS
-# Upon plugging in, Pico firmware will try to auto-connect to Wi-Fi
-# This script then starts calling run() in an infinite loop with a broad exception handler that restarts run()
-# Inside run(), there are some one-time calls to ensure wi-fi is connected,
-#  set the clock, and initialize the sensors
-# Once one-time initialization is done, another infinite loop starts monitoring temps and sending commits to GH
-# The Wi-Fi connection is checked each iteration to ensure the device is still active
+    def print(self, message: str, clock: RTC = None) -> None:
+        if clock:
+            t = clock.datetime
+            current = f"{t.tm_year}-{t.tm_mon:02d}-{t.tm_mday:02d}-{t.tm_hour:02d}-{t.tm_min:02d}-{t.tm_sec:02d}"
+        else:
+            current = "*******************"
+        if self.verbose:
+            print(f"{current} : {message}")
 
-# DIAGNOSTICS
-# Upon booting, the script will turn on the board LED as a health signal
-# While Wi-Fi is connecting, the LED will flash in steady pulses of 3
-# Once Wi-Fi is connected, it will attempt to access the internet, and it will flash quickly during this
-# Once both are connected, it will stay on steady.
-
-
-TEST_MODE = False
-
-
-def my_print(clock: RTC, message: str, verbose: bool = True) -> None:
-    t = clock.datetime
-    current = f"{t.tm_year}-{t.tm_mon:02d}-{t.tm_mday:02d}-{t.tm_hour:02d}-{t.tm_min:02d}-{t.tm_sec:02d}"
-    if verbose:
-        print(f"{current} : {message}")
-
-
-def my_sleep(num_seconds: int) -> None:
-    for _ in range(num_seconds):
-        feed_dog()
+    def flash_led(self, num_times: int) -> None:
+        self.led.value = False
+        for i in range(num_times * 2):
+            sleep(0.2)
+            self.led.value = not self.led.value
+        self.led.value = False
         sleep(1)
 
+    @staticmethod
+    def github_token(requests: Session) -> str:
+        github_token_url = getenv('TOKEN_URL')
+        response = requests.get(github_token_url)
+        content = response.content.decode('utf-8')
+        github_token = ''.join(reversed(content.replace('\n', '')))
+        return github_token
 
-def feed_dog() -> None:
-    try:
-        watchdog.feed()
-    except ValueError:
-        pass  # just let errors happen, keep trying
-
-
-def flash_led(led_object: DigitalInOut, num_times: int, flash_interval_seconds: float) -> None:
-    for i in range(num_times * 2):
-        feed_dog()
-        sleep(flash_interval_seconds / 2)
-        led_object.value = not led_object.value
-
-
-def connect_to_wifi(status_led: DigitalInOut) -> None:
-    if radio.ipv4_address:
-        print("******************* : Trying to connect to wifi, but radio already HAS an IP address, carrying on")
-        return
-    status_led.value = False
-    print("******************* : Radio does NOT have an IP address, attempting to connect")
-    while True:
-        flash_led(status_led, 3, 0.5)
-        status_led.value = False
-        ssid = getenv("WIFI_SSID")
-        pw = getenv("WIFI_PASSWORD")
-        print(f"******************* : Attempting to connect to wifi {ssid} : {pw}")
-        radio.connect(getenv("WIFI_SSID"), getenv("WIFI_PASSWORD"))
-        feed_dog()
+    def connect_to_wifi(self) -> None:
         if radio.ipv4_address:
-            status_led.value = True
             return
-        else:
-            print("******************* : Still no IP address, sleeping 2 seconds and we'll check again")
-            status_led.value = False
-            my_sleep(2)
+        self.led.value = False
+        wifi_string = getenv("WIFI")
+        if not wifi_string:
+            raise RuntimeError("WIFI environment variable not set")
+        all_wifi_data = wifi_string.strip().split(';')
+        while True:
+            self.flash_led(2)
+            for wifi_data in all_wifi_data:
+                name, ssid, pw = [x.strip() for x in wifi_data.split(',')]
+                self.print(f"Attempting to connect to {name} wifi {ssid} : {pw}")
+                try:
+                    radio.connect(ssid, pw)
+                    self.print(f"Connected to {name} wifi!")
+                    return
+                except ConnectionError:
+                    continue
+            self.print("Still no IP address, sleeping 2 seconds and we'll check again")
+            sleep(2)
 
+    @staticmethod
+    def init_connection_variables() -> [SocketpoolModuleType, Session]:
+        # Initialize Wi-Fi, Socket Pool, Request Session
+        pool: SocketpoolModuleType = get_radio_socketpool(radio)
+        ssl_context = get_radio_ssl_context(radio)
+        requests = Session(pool, ssl_context)
+        return pool, requests
 
-def disconnect_from_wifi(status_led: DigitalInOut) -> None:
-    if not radio.ipv4_address:
-        print("******************* : Trying to disconnect to wifi, but IP address is already invalid, carrying on")
-        feed_dog()
-        return
-    status_led.value = False
-    print("******************* : Attempting to disable WiFi radio")
-    radio.enabled = False
-    my_sleep(2)
+    @staticmethod
+    def set_extra_hot_ports() -> None:
+        """Set up any extra ports to output high for easier wiring"""
+        extra_hots_string = getenv("EXTRA_HOTS")
+        if extra_hots_string:
+            for extra_hot in extra_hots_string.split(","):
+                pin = getattr(board, extra_hot)
+                DigitalInOut(pin).switch_to_output(value=True)
 
+    def set_clock_to_cst(self, pool: SocketpoolModuleType, clock: RTC) -> None:
+        while True:
+            try:
+                packet = bytearray(48)
+                packet[0] = 0b00100011  # LI=0, VN=4, Mode=3 (client)
+                addr = pool.getaddrinfo("0.adafruit.pool.ntp.org", 123)[0][4]
+                with pool.socket(pool.AF_INET, pool.SOCK_DGRAM) as sock:
+                    sock.settimeout(5)
+                    sock.sendto(packet, addr)
+                    sock.recv_into(packet)
+                transmit_ts = unpack_from("!I", packet, offset=40)[0]
+                utc_time = transmit_ts - 2208988800  # convert NTP time to Unix time
+                cst_offset = -5 * 60 * 60  # ignores DST I think
+                time_int = utc_time + cst_offset
+                clock.datetime = localtime(time_int)
+                self.print(f"Pico time set to CST: {clock.datetime}", clock)
+                return
+            except OSError:
+                self.print("Encountered a connection error trying to set time, will try again", clock)
+            except ArithmeticError:
+                self.print("Encountered a math error, must be invalid time calculation, retrying", clock)
 
-def set_time_to_unix_time(clock: RTC, https: Session, status_led: DigitalInOut) -> None:
-    print("******************* : Attempting to set time")
-    connect_to_wifi(status_led)
-    feed_dog()
-    time_url = "http://worldtimeapi.org/api/timezone/America/Chicago"  # use http to avoid cert issues when setting time
-    while True:
+    def get_gpio_port_instance(self, clock: RTC, port_name: str):  # should be returning a Pin
+        self.print(f"Attempting to look up pin `{port_name}` in the board module", clock)
         try:
-            time_response = https.get(time_url)
-            feed_dog()
-            break
-        except (RuntimeError, OSError):
-            my_print(clock, "Could not send request, sleeping 5 seconds and retrying")
-            flash_led(status_led, 10, 0.1)
-            my_sleep(5)
-    data = time_response.json()
-    print(f"******************* : Got a timestamp from the worldtimeapi server: {data['datetime']}")
-    my_time = data['unixtime'] + data['raw_offset']  # + data['dst_offset']  # current local time ignoring DST for now
-    clock.datetime = struct_time(localtime(my_time))
-    my_print(clock, f"Pico time set to UTC: {clock.datetime}")
-    feed_dog()
-    disconnect_from_wifi(status_led)
-    feed_dog()
+            pin = getattr(board, port_name)
+            self.print("Found it!  Moving on", clock)
+            return pin
+        except AttributeError:
+            available_pins = [x for x in dir(board) if not x.startswith('__')]
+            self.print(f"Could not find port name!  Available names in board are: {available_pins}", clock)
+            raise
 
-
-def get_gpio_port_instance(clock: RTC, port_name: str):  # should be returning a Pin
-    my_print(clock, f"Attempting to look up pin `{port_name}` in the board module")
-    try:
-        pin = getattr(board, port_name)
-        my_print(clock, "Found it!  Moving on")
-        return pin
-    except AttributeError:
-        available_pins = [x for x in dir(board) if not x.startswith('__')]
-        my_print(clock, f"Could not find port name!  Available names in board are: {available_pins}")
-        raise
-
-
-def get_all_sensors_from_env(clock: RTC) -> dict:
-    class DummySensor:
-        temperature = -10.0
-
-    sensors = {}
-    my_print(clock, "Attempting to get all sensors from env")
-    for i in range(10):
-        sensor_variable_name = f"SENSOR_{i:02}"
-        tentative_sensor_and_io_port = getenv(sensor_variable_name)
-        if not tentative_sensor_and_io_port:
-            continue
-        my_print(clock, f"Found variable {sensor_variable_name} in env, parsing!")
-        sensor_id, gpio_port_name = tentative_sensor_and_io_port.split(':')
-        my_print(clock, f"Parsed: ID: {sensor_id}; Looking up the port as {gpio_port_name}")
-        port_var = get_gpio_port_instance(clock, gpio_port_name)
-        my_print(clock, f"Got a port name as: {sensor_id}, constructing sensor object")
-        if TEST_MODE:
-            sensors[sensor_id] = DummySensor()
-        else:
-            bus = OneWireBus(port_var)
-            connected_sensors = bus.scan()
-            sensor = DS18X20(bus, connected_sensors[0]) if len(connected_sensors) > 0 else None
-            if sensor:
-                my_print(clock, f"Successfully constructed sensor {sensor_id} on port {port_var}")
-                sensors[sensor_id] = sensor
+    def get_all_sensors_from_env(self, clock: RTC) -> dict[str, DS18X20]:
+        sensors = {}
+        self.print("Attempting to get all sensors from env", clock)
+        sensors_string = getenv("SENSORS")
+        if not sensors_string:
+            raise RuntimeError(f"Environment variable 'SENSORS' not set")
+        sensors_data = sensors_string.strip().split(";")
+        for sensor_data in sensors_data:
+            sensor_id, gpio_port_name = [x.strip() for x in sensor_data.split(',')]
+            self.print(f"Parsed: ID: {sensor_id}; Looking up the port as {gpio_port_name}", clock)
+            port_var = self.get_gpio_port_instance(clock, gpio_port_name)
+            self.print(f"Got a port name as: {sensor_id}, constructing sensor object", clock)
+            if self.test_mode:
+                class DummySensor:
+                    temperature = -10.0
+                sensors[sensor_id] = DummySensor()
             else:
-                # my_print(clock, "Constructing dummy sensor")
-                # sensors[sensor_id] = DummySensor(20.0)
-                my_print(clock, f"Could not construct sensor {sensor_id} on port {port_var}; skipping")
-        feed_dog()
-    return sensors
+                bus = OneWireBus(port_var)
+                connected_sensors = bus.scan()
+                if len(connected_sensors) > 0:
+                    # The adafruit_ds18x20.py file has a type hint of `int` for the second arg, but it's definitely
+                    # a OneWireAddress.  I've opened an issue to address it, but for now just ignore the type issue.
+                    # https://github.com/adafruit/Adafruit_CircuitPython_DS18X20/issues/33
+                    # noinspection PyTypeChecker
+                    sensor = DS18X20(bus, connected_sensors[0])
+                    self.print(f"Successfully constructed sensor {sensor_id} on port {port_var}", clock)
+                    sensors[sensor_id] = sensor
+                else:
+                    self.print(f"Could not construct sensor {sensor_id} on port {port_var}; skipping", clock)
+        self.print(f"All sensors found: {[x for x in sensors]}", clock)
+        return sensors
 
+    def warm_up_temperature_sensors(self, sensors: dict[str, DS18X20], clock) -> None:
+        for sensor_id, sensor_instance in sensors.items():
+            _ = sensor_instance.temperature  # call it once and give it a second to warm it up
+            sleep(1)
+            self.print(f"Sensor ID {sensor_id} New Temperature = {sensor_instance.temperature}", clock)
 
-def report_single_sensor(clock, https, sensor_id, sensor_instance, github_token) -> None:
-    t = clock.datetime
-    current = f"{t.tm_year}-{t.tm_mon:02d}-{t.tm_mday:02d}-{t.tm_hour:02d}-{t.tm_min:02d}-{t.tm_sec:02d}"
-    file_content = f"""---
+    def report_single_sensor(self, clock: RTC, requests: Session, sensor_id: str, sensor: DS18X20, token: str) -> None:
+        t = clock.datetime
+        current = f"{t.tm_year}-{t.tm_mon:02d}-{t.tm_mday:02d}-{t.tm_hour:02d}-{t.tm_min:02d}-{t.tm_sec:02d}"
+        file_content = f"""---
 sensor_id: {sensor_id}
-temperature: {sensor_instance.temperature}
+temperature: {sensor.temperature}
 measurement_time: {current}
 ---
 {{}}
-    """
-    file_name = f"{current}_{sensor_id}.html"
-    file_path = f"_posts/{sensor_id}/{file_name}"
-    url = f"https://api.github.com/repos/okielife/TempSensors/contents/{file_path}"
-    headers = {'Accept': 'application/vnd.github + json', 'Authorization': f'Token {github_token}'}
-    encoded_content = b2a_base64(file_content.encode()).decode()
-    data = {'message': f"Updating {file_path}", 'content': encoded_content}
-    try:
-        response = https.put(url, headers=headers, data=dumps(data))
-    except (RuntimeError, OSError) as e:
-        my_print(clock, f"Could not send request, reason={e}\n, skipping this report, checks will continue")
-        return
-    if response.status_code in (200, 201):
-        my_print(clock, "PUT Complete: File created/updated successfully.")
-    else:
-        my_print(clock, f"PUT Error: {response.text}")
-    feed_dog()
-
-
-def run(status_led: DigitalInOut) -> None:
-    # Convert to seconds for calculations
-    commit_interval_minutes = 15
-    sensing_interval_seconds = 30
-    commit_interval_seconds = commit_interval_minutes * 60
-
-    # setup the Pico clock early so we can use it in debug messages
-    clock = RTC()
-
-    # set up connection variables
-    pool = SocketPool(radio)
-    https = Session(pool, create_default_context())  # the pool argument is fine, not sure why it's confused in PyCharm
-
-    # set the time for sensor reporting, this will connect to wifi as needed
-    set_time_to_unix_time(clock, https, status_led)
-
-    # Local project settings - must be set in settings.toml or ENV
-    github_token_url = getenv('TOKEN_URL')
-    response = https.get(github_token_url)
-    content = response.content.decode('utf-8')
-    github_token = ''.join(reversed(content.replace('\n', '')))
-    sensors = get_all_sensors_from_env(clock)
-    sensor_ids = [x for x in sensors]  # list the dict keys
-    my_print(clock, f"All sensors found: {sensor_ids}")
-
-    # set the to-do time stamps so that they will run the first time
-    next_commit_time = mktime(clock.datetime) - commit_interval_seconds
-
-    while True:
-
-        # get the current time for checking what we need to do
-        current_time_in_seconds = mktime(clock.datetime)
-        feed_dog()
-
-        # sense temperatures (update screen here if it is connected)
-        for sensor_id, sensor_instance in sensors.items():
-            my_print(clock, f"Sensor ID {sensor_id} New Temperature = {sensor_instance.temperature}")
-            feed_dog()
-
-        # if the current time has reached the next commit time, we need to commit!
-        if current_time_in_seconds >= next_commit_time:
-            # connect back up to wifi
-            connect_to_wifi(status_led)
-            feed_dog()
-
-            my_print(clock, "Commit time has been reached, attempting to commit")
-            for sensor_id, sensor_instance in sensors.items():
-                report_single_sensor(clock, https, sensor_id, sensor_instance, github_token)
-                feed_dog()
-            next_commit_time = current_time_in_seconds + commit_interval_seconds
-            feed_dog()
-
-            # disconnect from wifi here
-            disconnect_from_wifi(status_led)
-            feed_dog()
-        else:
-            my_print(clock, "Commit time NOT reached, skipping the commit")
-
-        # clean up memory usage, verified heap memory leaks, so this is important!
-        collect()
-        my_sleep(sensing_interval_seconds)
-
-
-def main(set_watchdog: bool):
-    if set_watchdog:
-        # ask the watchdog to reset the board if not fed for a specified number of seconds
-        watchdog.timeout = 8
-        watchdog.mode = WatchDogMode.RESET
-    feed_dog()
-    # set up status LED as an output initially ON
-    _status_led = DigitalInOut(LED)
-    _status_led.switch_to_output(value=True)
-    while True:
-        feed_dog()
+        """
+        file_name = f"{current}_{sensor_id}.html"
+        file_path = f"_posts/{sensor_id}/{file_name}"
+        url = f"https://api.github.com/repos/okielife/TempSensors/contents/{file_path}"
+        headers = {'Accept': 'application/vnd.github + json', 'Authorization': f'Token {token}'}
+        encoded_content = b2a_base64(file_content.encode()).decode()
+        data = {'message': f"Updating {file_path}", 'content': encoded_content}
         try:
-            run(_status_led)
-        except KeyboardInterrupt:
-            print("Encountered keyboard interrupt, letting the watchdog sleep and exiting")
-            watchdog.mode = None
-            break
-        except Exception as e:
-            print(f"Unexpected error in run() function, retrying, reason: {e}")
-            continue
+            response = requests.put(url, headers=headers, data=dumps(data))
+        except (RuntimeError, OSError) as e:
+            self.print(f"Could not send request, reason={e}\n, skipping this report, checks will continue", clock)
+            return
+        if response.status_code in (200, 201):
+            self.print("PUT Complete: File created/updated successfully.", clock)
+        else:
+            self.print(f"PUT Error: {response.text}", clock)
+
+    def report_all_sensors(self, requests: Session, clock: RTC, sensors: dict[str, DS18X20]) -> None:
+        self.flash_led(4)
+        token = self.github_token(requests)
+        for sensor_id, sensor_instance in sensors.items():
+            self.report_single_sensor(clock, requests, sensor_id, sensor_instance, token)
+        self.flash_led(5)
 
 
 if __name__ == "__main__":
-    main(False)  # if we are running this file from and IDE, call main with False to avoid setting up the watchgod
+    # noinspection PyUnresolvedReferences
+    led = DigitalInOut(board.LED)  # Built-in LED
+    led.switch_to_output(value=True)
+    s = Sensor(led)
+    exit(0 if s.success else 1)
+
