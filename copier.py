@@ -5,6 +5,12 @@ from sys import argv
 
 
 def run(circuit_py: Path):
+    """
+    Copies files from this project onto the Circuit Python mounted drive, or the user-specified path
+
+    :param circuit_py: An optional Path to place the sensor file structure, instead of the default CIRCUITPY dir.
+    :return: None
+    """
     project_root = Path(__file__).parent.resolve()
     backup_root_dir = Path('/tmp/sensing_backups')
     backup_root_dir.mkdir(exist_ok=True)

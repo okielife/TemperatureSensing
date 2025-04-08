@@ -53,7 +53,7 @@ try:
 except ImportError:  # pragma: no cover
     # noinspection PyPackageRequirements
     import board  # import this whole thing so we can search for symbols on it
-from microcontroller import reset
+from microcontroller import Pin, reset
 from digitalio import DigitalInOut, Direction
 # noinspection PyPackageRequirements
 from rtc import RTC
@@ -74,6 +74,14 @@ from adafruit_requests import Session
 
 
 class Sensor:
+    """
+    The main Sensor class that captures all operations around setting up network connections,
+    instantiating the temperature probes, managing the LED, sending data to GitHub, etc.
+    Attributes:
+        test_mode (bool): Set to true before calling the run functions to enable test mode
+        verbose (bool): Default True, set to False before calling the run functions to hush the output
+        success (bool): After running, this flag holds whether the operation was successful
+    """
 
     def __init__(self):
         # noinspection PyUnresolvedReferences
@@ -84,7 +92,13 @@ class Sensor:
         self.verbose = True
         self.success = False
 
-    def print(self, message: str, clock: RTC = None) -> None:
+    def print(self, message: str, clock: RTC | None = None) -> None:
+        """
+        A print wrapper function that formats the output in a structured way with an optional timestamp
+        :param message: The message to be printed
+        :param clock: An optional RTC clock, if passed in, it is used to retrieve the time for a time stamp
+        :return: None
+        """
         if clock:
             t = clock.datetime
             current = f"{t.tm_year}-{t.tm_mon:02d}-{t.tm_mday:02d}-{t.tm_hour:02d}-{t.tm_min:02d}-{t.tm_sec:02d}"
@@ -94,6 +108,11 @@ class Sensor:
             print(f"{current} : {message}")
 
     def flash_led(self, num_times: int) -> None:
+        """
+        A utility function to blink the LED a specific number of times
+        :param num_times: The number of times to blink the LED
+        :return: None
+        """
         self.led.value = False
         for i in range(num_times * 2):
             sleep(0.2)
@@ -103,13 +122,22 @@ class Sensor:
 
     @staticmethod
     def init_connection_variables() -> [SocketpoolModuleType, Session]:
-        # Initialize Wi-Fi, Socket Pool, Request Session
+        """
+        This function initializes the Wi-Fi on the board, and sets up a https request session for subsequent HTTP calls.
+        :return: A tuple containing a Socket Pool and a Session.
+        """
+        # TODO: Maybe this should just be done in the constructor and pool/requests stored on self?
         pool: SocketpoolModuleType = get_radio_socketpool(radio)
         ssl_context: SSLContext = get_radio_ssl_context(radio)
         requests: Session = Session(pool, ssl_context)
         return pool, requests
 
     def connect_to_wifi(self) -> None:
+        """
+        This function attempts to connect to known Wi-Fi networks as specified by the WIFI environment variable.
+        Note that this function will continue forever attempting to connect as this may happen from time to time.
+        :return: None
+        """
         if radio.ipv4_address:
             return
         self.led.value = False
@@ -133,6 +161,11 @@ class Sensor:
 
     @staticmethod
     def github_token(requests: Session) -> str:
+        """
+        Retrieves a decoded GitHub token from a specific URL where it is "hidden".
+        :param requests: The https requests session
+        :return: A string GitHub token, probably like "ghp-abc123..."
+        """
         github_token_url = getenv('TOKEN_URL')
         if not github_token_url:
             raise RuntimeError("TOKEN_URL environment variable not set")
@@ -143,7 +176,11 @@ class Sensor:
 
     @staticmethod
     def set_extra_hot_ports() -> None:
-        """Set up any extra ports to output high for easier wiring"""
+        """
+        Sets up extra ports as high line voltage to allow for easily connecting multiple temperature probes. The
+        extra pins should be specified in the EXTRA_HOTS environment variable.
+        :return: None
+        """
         extra_hots_string = getenv("EXTRA_HOTS")
         if extra_hots_string:
             for extra_hot in extra_hots_string.split(","):
@@ -152,6 +189,13 @@ class Sensor:
                 p.switch_to_output(value=True)
 
     def set_clock_to_cst(self, pool: SocketpoolModuleType, clock: RTC) -> None:
+        """
+        Sets the built-in clock to Central Standard Time using the Adafruit NTP pool and NTP protocol.  Only
+        accurate down to the second or so, but that's plenty close for our temperature reporting.
+        :param pool: The socket pool that was instantiated using init_connection_variables
+        :param clock: The RTC clock instance to be set, which was retrieved from the RTC library
+        :return:None
+        """
         while True:
             try:
                 packet = bytearray(48)
@@ -173,7 +217,13 @@ class Sensor:
                 # classes, so it's tough to override things later.  Probably worth revisiting later
                 self.print(f"Encountered an error trying to set time, will try again: {e}", clock)
 
-    def get_gpio_port_instance(self, clock: RTC, port_name: str):  # should be returning a Pin
+    def get_gpio_port_instance(self, clock: RTC, port_name: str) -> Pin:
+        """
+        Gets a Pin instance for a given port name
+        :param clock: The RTC clock instance that we pass around.
+        :param port_name: The name of a port as found in the board code, like "GP1", "GP2"
+        :return: A microcontroller Pin instance for that port.
+        """
         self.print(f"Attempting to look up pin `{port_name}` in the board module", clock)
         try:
             pin = getattr(board, port_name)
@@ -185,6 +235,11 @@ class Sensor:
             raise
 
     def get_all_sensors_from_env(self, clock: RTC) -> dict[str, DS18X20]:
+        """
+        Gets all sensors to be monitored, as defined in the SENSORS environment variable.
+        :param clock: The RTC clock instance that we pass around.
+        :return: A dictionary of {sensor ID string : DS18X80 probe instance}
+        """
         sensors = {}
         self.print("Attempting to get all sensors from env", clock)
         sensors_string = getenv("SENSORS")
@@ -218,12 +273,28 @@ class Sensor:
         return sensors
 
     def warm_up_temperature_sensors(self, sensors: dict[str, DS18X20], clock) -> None:
+        """
+        This function loops over the provided sensor dictionary, calling temperature on each to "warm" them up.  When
+        you first call .temperature on them, they can report bad values, so this gets that out of the way.
+        :param sensors: The dictionary of sensors, as retrieved from get_all_sensors_from_env()
+        :param clock: The RTC clock instance that we pass around.
+        :return: None
+        """
         for sensor_id, sensor_instance in sensors.items():
             _ = sensor_instance.temperature  # call it once and give it a second to warm it up
             sleep(1)
             self.print(f"Sensor ID {sensor_id} New Temperature = {sensor_instance.temperature}", clock)
 
     def report_single_sensor(self, clock: RTC, requests: Session, sensor_id: str, sensor: DS18X20, token: str) -> bool:
+        """
+        Reads the current temperature, builds an HTTPS PUT request, and reports this sensor to GitHub
+        :param clock: The RTC clock instance we pass around.
+        :param requests: The HTTPS requests instance
+        :param sensor_id: The ID of the sensor, such as "Pantry East"
+        :param sensor: The associated DS18X20 sensor instance
+        :param token: The string GitHub token which write access to the TempSensors repository.
+        :return: A boolean, true if successful, false otherwise.
+        """
         t = clock.datetime
         current = f"{t.tm_year}-{t.tm_mon:02d}-{t.tm_mday:02d}-{t.tm_hour:02d}-{t.tm_min:02d}-{t.tm_sec:02d}"
         file_content = f"""---
@@ -252,6 +323,13 @@ measurement_time: {current}
             return False
 
     def report_all_sensors(self, requests: Session, clock: RTC, sensors: dict[str, DS18X20]) -> bool:
+        """
+        This function loops over the provided sensor dictionary and reports each one of them to GitHub
+        :param requests: The HTTPS requests instance
+        :param clock: The RTC clock instance we pass around.
+        :param sensors: The dictionary of sensors, as retrieved from get_all_sensors_from_env()
+        :return: A bool flag, True if all were successful, false otherwise.
+        """
         self.flash_led(4)
         token = self.github_token(requests)
         complete_success = True
@@ -263,6 +341,11 @@ measurement_time: {current}
         return complete_success
 
     def run_once(self):
+        """
+        Run one sweep of the temperature sensing process, including setting up the network, reading temp, and reporting.
+        :return: None, just check self.success for the result
+        """
+        # TODO: Think about how different functions return bools and some throw instead...unify this
         try:
             clock = RTC()
             pool, requests = self.init_connection_variables()
@@ -281,13 +364,22 @@ measurement_time: {current}
             self.print(f"Unexpected error in run() function, reason: {e}")
 
     def run_loop(self):
+        """
+        So this function calls run_once to perform a single full sweep of the sensing process.  However, with this
+        entry point, it will then sleep for a while (40 minutes if it was successful, 10 minutes if it wasn't), and then
+        BOOM hardware resets the whole microcontroller.  The idea is that this function should be called by the
+        microcontroller's automatic entry point, so that it will immediately be called right back again.  This avoids
+        having to enable hardware watchdogs, and also avoids memory issues if a loop continues for so long and there
+        is any miniscule memory leak or issue.
+        :return: None, just check self.success for the result
+        """
         self.run_once()
         if self.success:  # success
             # during this time, we'll steadily blink the light 1s on and 1s off
             data_frequency_minutes = 40
             data_frequency_seconds = data_frequency_minutes * 60
             self.led.value = False
-            for _ in range(data_frequency_seconds // 2):
+            for _ in range(data_frequency_seconds):
                 self.led.value = not self.led.value
                 sleep(2)
             self.led.value = False

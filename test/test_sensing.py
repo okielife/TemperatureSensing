@@ -42,6 +42,7 @@ modules['board_definitions'] = mock_board
 
 fake_controller = ModuleType('microcontroller')
 fake_controller.reset = MagicMock(return_value=True)
+fake_controller.Pin = MagicMock(return_value=fake_pin)
 modules['microcontroller'] = fake_controller
 
 fake_supervisor = ModuleType('supervisor')
