@@ -5,9 +5,9 @@ import supervisor
 
 from sensing import Sensor
 
-if supervisor.runtime.usb_connected:  # pragma: no cover
+if supervisor.runtime.usb_connected:
     print("Serial USB connected detected, skipping any code, run it manually from IDE")
     while True:
-        sleep(1)  # Adjust blink speed as needed
+        sleep(1)
 else:
     Sensor().run_loop()
