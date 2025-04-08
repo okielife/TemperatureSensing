@@ -1,23 +1,63 @@
-# CircuitPython library imports
+# This is the main sensor class code for the temperature sensors.
+
+# Relevant files include:
+#  CircuitPython Firmware
+#     We are currently using 9.2.1.  Might try 10.0 after release.
+#  /lib/
+#     Get the following packages from the CircuitPython 9.2.1 library:
+#        adafruit_onewire/
+#        adafruit_connection_manager.mpy
+#        adafruit_ds18x20.mpy
+#        adafruit_requests.mpy
+#  /sensing.py (this file)
+#     Actual sensor class with all functionality for reading and reporting temperatures
+#     Runs the sensor code on an infinite loop, resetting the machine hardware each cycle
+#     If this file detects the controller is connected to the USB runtime, it won't do anything to allow debugging
+#  /settings.toml
+#     Configuration specific to this controller, including Wi-Fi information and temperature sensor connections
+
+# if something goes wrong with the CIRCUITPY filesystem, just run
+# import storage
+# storage.erase_filesystem()
+
+# WIRING CONFIGURATION
+# Temperature Sensor RED TO Pico 3V3OUT (Extra 3V outputs can be assigned as csv in the EXTRA_HOTS environment variable)
+# Temperature Sensor BLACK TO Pico GND
+# Temperature Sensor YELLOW TO Pico GPXX where GPXX is defined in the settings.toml file
+# Resistor (~4.7k) CONNECTS EACH Temperature Sensor RED AND Temperature Sensor YELLOW
+
+# DIAGNOSTICS
+# Upon booting, there will be one brief burst of LEDs
+# After this, the LED will follow one of two paths:
+#   - It will do a 2-blink before trying to connect to Wi-Fi.  This 2-blink will repeat until successful.
+#   - It will do a 3-blink before trying to query current time.  This 3-blink will repeat until successful.
+#   - It will do a 4-blink before trying to send temperature reports to the repo
+#   - It will do a 5-blink to signal that the operations were complete, and it is about to rest
+#   - It will rest for 15 minutes before rebooting, and during this time there will be a very slow blink
+
+# *** Python Standard Library Imports
+from binascii import b2a_base64
+from json import dumps
+from os import getenv
+from ssl import SSLContext
+from struct import unpack_from
+from sys import exit
+from time import localtime, sleep
+
+# *** CircuitPython Standard Library Imports
 try:
     from board_definitions import raspberry_pi_pico_w as board
 except ImportError:  # pragma: no cover
     # noinspection PyPackageRequirements
     import board  # import this whole thing so we can search for symbols on it
-from binascii import b2a_base64
-from digitalio import DigitalInOut
-from json import dumps
-from os import getenv
+from microcontroller import reset
+from digitalio import DigitalInOut, Direction
 # noinspection PyPackageRequirements
 from rtc import RTC
-from ssl import SSLContext
-from struct import unpack_from
-from sys import exit
-from time import localtime, sleep
 # noinspection PyPackageRequirements
 from wifi import radio
 
-# Adafruit library imports
+# *** CircuitPython Extra Library Imports
 from adafruit_connection_manager import get_radio_socketpool, get_radio_ssl_context
 try:
     from adafruit_connection_manager import SocketpoolModuleType
@@ -32,30 +72,14 @@ from adafruit_requests import Session
 
 class Sensor:
 
-    def __init__(self, _led: DigitalInOut):
-        self.led = _led
+    def __init__(self):
+        # noinspection PyUnresolvedReferences
+        self.led = DigitalInOut(board.LED)  # Built-in LED
+        self.led.direction = Direction.OUTPUT
         self.set_extra_hot_ports()
         self.test_mode = False
         self.verbose = True
         self.success = False
-
-    def run_once(self):
-        try:
-            clock = RTC()
-            pool, requests = self.init_connection_variables()
-            self.connect_to_wifi()
-            self.set_clock_to_cst(pool, clock)
-            sensors = self.get_all_sensors_from_env(clock)
-            self.warm_up_temperature_sensors(sensors, clock)
-            self.report_all_sensors(requests, clock, sensors)
-            self.success = True
-        # not covering all of these exceptions in unit test coverage, each function is tested separately
-        except KeyboardInterrupt:  # pragma: no cover
-            self.print("Encountered keyboard interrupt, exiting")
-        except ConnectionError as e:  # pragma: no cover
-            self.print(f"Could not find network with that SSID or failed to connect: {e}")
-        except Exception as e:
-            self.print(f"Unexpected error in run() function, reason: {e}")
 
     def print(self, message: str, clock: RTC = None) -> None:
         if clock:
@@ -235,11 +259,51 @@ measurement_time: {current}
         self.flash_led(5)
         return complete_success
 
+    def run_once(self):
+        try:
+            clock = RTC()
+            pool, requests = self.init_connection_variables()
+            self.connect_to_wifi()
+            self.set_clock_to_cst(pool, clock)
+            sensors = self.get_all_sensors_from_env(clock)
+            self.warm_up_temperature_sensors(sensors, clock)
+            self.report_all_sensors(requests, clock, sensors)
+            self.success = True
+        # not covering all of these exceptions in unit test coverage, each function is tested separately
+        except KeyboardInterrupt:  # pragma: no cover
+            self.print("Encountered keyboard interrupt, exiting")
+        except ConnectionError as e:  # pragma: no cover
+            self.print(f"Could not find network with that SSID or failed to connect: {e}")
+        except Exception as e:
+            self.print(f"Unexpected error in run() function, reason: {e}")
+
+    def run_loop(self):
+        self.run_once()
+        if self.success:  # success
+            # during this time, we'll steadily blink the light 1s on and 1s off
+            data_frequency_minutes = 40
+            data_frequency_seconds = data_frequency_minutes * 60
+            self.led.value = False
+            for _ in range(data_frequency_seconds // 2):
+                self.led.value = not self.led.value
+                sleep(2)
+            self.led.value = False
+        else:  # failure
+            # sleep for a bit then reset
+            failure_sleep_minutes = 10
+            failure_sleep_seconds = failure_sleep_minutes * 60
+            self.led.value = False
+            for _ in range(failure_sleep_seconds):
+                for _ in range(20):
+                    self.led.value = not self.led.value
+                    sleep(0.1)
+                sleep(1)
+            self.led.value = False
+        # regardless of outcome, do a hardware reset to start all over
+        reset()
+
 
 if __name__ == "__main__":  # pragma: no cover
-    # noinspection PyUnresolvedReferences
-    led = DigitalInOut(board.LED)  # Built-in LED
-    led.switch_to_output(value=True)
-    s = Sensor(led)
+    s = Sensor()
     s.run_once()
     exit(0 if s.success else 1)

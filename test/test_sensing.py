@@ -1,6 +1,7 @@
+# TODO: Rework the mock classes for socket pools so that it is easier to test the CST calc function
 from os import environ
 from sys import modules
-from time import localtime, struct_time
+from time import localtime, struct_time, strftime
 from types import ModuleType
 from unittest import TestCase
 from unittest.mock import MagicMock, patch
@@ -8,6 +9,8 @@ from unittest.mock import MagicMock, patch
 mock_time = ModuleType('time')
 mock_time.sleep = MagicMock('sleep')
 mock_time.localtime = lambda x: localtime(x)
+mock_time.struct_time = struct_time
+mock_time.strftime = strftime
 modules['time'] = mock_time
 
 # Create a few fake modules and add them to sys.modules
@@ -24,6 +27,7 @@ modules["wifi"] = fake_wifi
 
 fake_dio = ModuleType("digitalio")
 fake_dio.DigitalInOut = MagicMock(name="DigitalInOut")
+fake_dio.Direction = MagicMock()
 fake_pin = MagicMock()
 fake_pin.switch_to_output = MagicMock()
 fake_dio.DigitalInOut.return_value = fake_pin
@@ -33,7 +37,17 @@ mock_board = ModuleType('board_definitions')
 mock_board.raspberry_pi_pico_w = MagicMock('raspberry_pi_pico_w')
 mock_board.raspberry_pi_pico_w.GP4 = fake_pin
 mock_board.raspberry_pi_pico_w.GP12 = fake_pin
+mock_board.raspberry_pi_pico_w.LED = fake_pin
 modules['board_definitions'] = mock_board
+
+fake_controller = ModuleType('microcontroller')
+fake_controller.reset = MagicMock(return_value=True)
+modules['microcontroller'] = fake_controller
+
+fake_supervisor = ModuleType('supervisor')
+fake_supervisor.runtime = MagicMock()
+fake_supervisor.runtime.usb_connected = False
+modules['supervisor'] = fake_supervisor
 
 
 class FakeSocket:
@@ -88,14 +102,14 @@ fake_requests.Session = MagicMock(return_value=fake_session_instance)
 modules["adafruit_requests"] = fake_requests
 
 # and only after that do we import the Sensor class
-from sensing.sensing import Sensor  # noqa: E402
+from main import Sensor  # noqa: E402
 
 
 class TestSensorNew(TestCase):
 
     @staticmethod
     def _init_clock():
-        s = Sensor(fake_led)
+        s = Sensor()
         c = fake_rtc.RTC()
         socket_pool, session = Sensor.init_connection_variables()
         s.set_clock_to_cst(socket_pool, c)
@@ -111,7 +125,7 @@ class TestSensorNew(TestCase):
     def test_connect_to_wifi(self, _mock_print):
         # first check if Wi-Fi is already set
         fake_wifi.radio.ipv4_address = "1.1.1.1"
-        s = Sensor(fake_led)
+        s = Sensor()
         s.connect_to_wifi()  # if we made it here, it's fine
         # now let's disable the ip address and see what happens
         fake_wifi.radio.ipv4_address = None
@@ -174,7 +188,7 @@ class TestSensorNew(TestCase):
 
     @patch('builtins.print')
     def test_set_clock_to_cst(self, _mock_print):
-        s = Sensor(fake_led)
+        s = Sensor()
         c = fake_rtc.RTC()
         socket_pool, session = Sensor.init_connection_variables()
         s.set_clock_to_cst(socket_pool, c)
@@ -182,7 +196,7 @@ class TestSensorNew(TestCase):
 
     @patch('builtins.print')
     def test_get_gpio_port_instance(self, _mock_print):
-        s = Sensor(fake_led)
+        s = Sensor()
         c = self._init_clock()
         # first call with a good pin name (as defined in the mock above)
         p = s.get_gpio_port_instance(c, 'GP4')
@@ -193,7 +207,7 @@ class TestSensorNew(TestCase):
 
     @patch('builtins.print')
     def test_get_all_sensors_from_env(self, _mock_print):
-        s = Sensor(fake_led)
+        s = Sensor()
         c = self._init_clock()
         # first what if we don't have any defined
         if 'SENSORS' in environ:  # pragma: no cover
@@ -221,7 +235,7 @@ class TestSensorNew(TestCase):
 
     @patch('builtins.print')
     def test_warm_up_temperature_sensors(self, _mock_print):
-        s = Sensor(fake_led)
+        s = Sensor()
         c = self._init_clock()
         fake_bus.scan.return_value = [0]
         with patch.dict(environ, {"SENSORS": "Name1,GP4;Name2,GP12"}):
@@ -230,7 +244,7 @@ class TestSensorNew(TestCase):
 
     @patch('builtins.print')
     def test_report_single_sensor(self, _mock_print):
-        s = Sensor(fake_led)
+        s = Sensor()
         c = self._init_clock()
         fake_bus.scan.return_value = [0]
         with patch.dict(environ, {"SENSORS": "Name1,GP4"}):
@@ -250,7 +264,7 @@ class TestSensorNew(TestCase):
 
     @patch('builtins.print')
     def test_report_all_sensors(self, _mock_print):
-        s = Sensor(fake_led)
+        s = Sensor()
         c = self._init_clock()
         fake_bus.scan.return_value = [0]
         with patch.dict(environ, {"SENSORS": "Name1,GP4"}):
@@ -268,16 +282,34 @@ class TestSensorNew(TestCase):
 
     @patch('builtins.print')
     def test_run_once(self, _mock_print):
-        s = Sensor(fake_led)
+        s = Sensor()
         fake_bus.scan.return_value = [0]
         with patch.dict(environ,
                         {"SENSORS": "Name1,GP4", "TOKEN_URL": "dummy", "EXTRA_HOTS": "GP4,GP12", "WIFI": "x,y,z"}):
             s.run_once()
         self.assertTrue(s.success)
-
-        s = Sensor(fake_led)
+        s = Sensor()
         fake_bus.scan.return_value = []
         with patch.dict(environ,
                         {"SENSORS": "Name1,GP4", "TOKEN_URL": "dummy", "EXTRA_HOTS": "GP4,GP12", "WIFI": "x,y,z"}):
             s.run_once()
         self.assertFalse(s.success)
+
+    @patch('builtins.print')
+    def test_pico_main(self, _mock_print):
+        s = Sensor()
+        fake_controller.reset.reset_mock()
+        fake_bus.scan.return_value = [0]
+        with patch.dict(environ,
+                        {"SENSORS": "Name1,GP4", "TOKEN_URL": "dummy", "EXTRA_HOTS": "GP4,GP12", "WIFI": "x,y,z"}):
+            s.run_loop()
+        self.assertTrue(s.success)
+        fake_controller.reset.assert_called_once()
+        fake_controller.reset.reset_mock()
+        s = Sensor()
+        fake_bus.scan.return_value = []
+        with patch.dict(environ,
+                        {"SENSORS": "Name1,GP4", "TOKEN_URL": "dummy", "EXTRA_HOTS": "GP4,GP12", "WIFI": "x,y,z"}):
+            s.run_loop()
+        self.assertFalse(s.success)
+        fake_controller.reset.assert_called_once()
