@@ -10,7 +10,7 @@ def run(circuit_py: Path):
     backup_root_dir.mkdir(exist_ok=True)
     backup_dir = backup_root_dir / datetime.now().strftime("%Y-%m-%d-%H-%M-%S.%f")
     backup_dir.mkdir()
-    for file_name in ['main.py', 'settings.toml']:
+    for file_name in ['main.py', 'sensing.py', 'settings.toml']:
         print(f"Processing file: {file_name}")
         tentative_version_on_pico = circuit_py / file_name
         if tentative_version_on_pico.exists():

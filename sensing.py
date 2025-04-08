@@ -11,7 +11,10 @@
 #        adafruit_requests.mpy
 #  /sensing.py (this file)
 #     Actual sensor class with all functionality for reading and reporting temperatures
-#     Runs the sensor code on an infinite loop, resetting the machine hardware each cycle
+#     Runs the sensor code on either an infinite loop, resetting the machine hardware each cycle, or a single pass
+#     Run this file from a serial connection to do a single pass for debugging
+#  /main.py
+#     The Pico primary entry point to the sensor operation.  It will instantiate the sensor and start running the loop.
 #     If this file detects the controller is connected to the USB runtime, it won't do anything to allow debugging
 #  /settings.toml
 #     Configuration specific to this controller, including Wi-Fi information and temperature sensor connections
