@@ -121,19 +121,11 @@ class TestSensor(TestCase):
                 del environ[r]
             else:
                 self.env_values.append(None)
-        self.c = self.get_clock()
 
     def tearDown(self):
         for name, value in zip(self.responsive_environment_variables, self.env_values):
             if value:  # pragma: no cover
                 environ[name] = value
-
-    def get_clock(self):
-        c = self.fake_rtc.RTC()
-        with patch('builtins.print') as _:
-            socket_pool, session = self.s.init_connection_variables()
-            self.s.set_clock_to_cst(socket_pool, c)
-        return c
 
     def test_init_connection_variables(self):
         """Check to make sure the function returns pool, session types as returned by the library"""
@@ -203,37 +195,37 @@ class TestSensor(TestCase):
     def test_set_clock_to_cst(self, _mock_print):
         c = self.fake_rtc.RTC()
         socket_pool, session = self.s.init_connection_variables()
-        self.s.set_clock_to_cst(socket_pool, c)
+        self.s.set_clock_to_cst(socket_pool)
         self.assertIsInstance(c.datetime, struct_time)
 
     @patch('builtins.print')
     def test_get_gpio_port_instance(self, _mock_print):
         # first call with a good pin name (as defined in the mock above)
-        p = self.s.get_gpio_port_instance(self.c, 'GP4')
+        p = self.s.get_gpio_port_instance('GP4')
         self.assertIsInstance(p, TestSensor.FakePin)
         # then call with a bad pin name
         with self.assertRaises(RuntimeError):
-            self.s.get_gpio_port_instance(self.c, 'ABC')
+            self.s.get_gpio_port_instance('ABC')
 
     @patch('builtins.print')
     def test_get_all_sensors_from_env(self, _mock_print):
         # first what if we don't have any defined
         with self.assertRaises(RuntimeError):
-            self.s.get_all_sensors_from_env(self.c)
+            self.s.get_all_sensors_from_env()
         # now what if we do have some sensors, but there's a bad port specification
         self.fake_bus.scan.return_value = [0]
         with patch.dict(environ, {"SENSORS": "Name1,GP4;Name2,GP13"}):
             with self.assertRaises(RuntimeError):
-                self.s.get_all_sensors_from_env(self.c)
+                self.s.get_all_sensors_from_env()
         # next what if we specify sensors correctly, but the init fails (bad wiring connection)
         self.fake_bus.scan.return_value = []
         with patch.dict(environ, {"SENSORS": "Name1,GP4"}):
             with self.assertRaises(RuntimeError):
-                self.s.get_all_sensors_from_env(self.c)
+                self.s.get_all_sensors_from_env()
         # finally what if we're all good
         self.fake_bus.scan.return_value = [0]
         with patch.dict(environ, {"SENSORS": "Name1,GP4;Name2,GP12"}):
-            sensors = self.s.get_all_sensors_from_env(self.c)
+            sensors = self.s.get_all_sensors_from_env()
             self.assertEqual(2, len(sensors))
             for i, s in sensors.items():
                 self.assertIsInstance(i, str)
@@ -243,41 +235,41 @@ class TestSensor(TestCase):
     def test_warm_up_temperature_sensors(self, _mock_print):
         self.fake_bus.scan.return_value = [0]
         with patch.dict(environ, {"SENSORS": "Name1,GP4;Name2,GP12"}):
-            sensors = self.s.get_all_sensors_from_env(self.c)
-        self.s.warm_up_temperature_sensors(sensors, self.c)
+            sensors = self.s.get_all_sensors_from_env()
+        self.s.warm_up_temperature_sensors(sensors)
 
     @patch('builtins.print')
     def test_report_single_sensor(self, _mock_print):
         self.fake_bus.scan.return_value = [0]
         with patch.dict(environ, {"SENSORS": "Name1,GP4"}):
-            sensors = self.s.get_all_sensors_from_env(self.c)
+            sensors = self.s.get_all_sensors_from_env()
             single_sensor_id = next(iter(sensors.keys()))
         socket_pool, session = self.s.init_connection_variables()
         self.fake_session_instance.put.side_effect = ConnectionError
-        b = self.s.report_single_sensor(self.c, session, single_sensor_id, sensors[single_sensor_id], 'token')
+        b = self.s.report_single_sensor(session, single_sensor_id, sensors[single_sensor_id], 'token')
         self.assertFalse(b)  # just returns False, doesn't abort
         self.fake_session_instance.put.side_effect = None
         self.fake_put_response.status_code = 404
-        b = self.s.report_single_sensor(self.c, session, single_sensor_id, sensors[single_sensor_id], 'token')
+        b = self.s.report_single_sensor(session, single_sensor_id, sensors[single_sensor_id], 'token')
         self.assertFalse(b)  # just returns False, doesn't abort
         self.fake_put_response.status_code = 200
-        b = self.s.report_single_sensor(self.c, session, single_sensor_id, sensors[single_sensor_id], 'token')
+        b = self.s.report_single_sensor(session, single_sensor_id, sensors[single_sensor_id], 'token')
         self.assertTrue(b)  # just returns False, doesn't abort
 
     @patch('builtins.print')
     def test_report_all_sensors(self, _mock_print):
         self.fake_bus.scan.return_value = [0]
         with patch.dict(environ, {"SENSORS": "Name1,GP4"}):
-            sensors = self.s.get_all_sensors_from_env(self.c)
+            sensors = self.s.get_all_sensors_from_env()
         socket_pool, session = self.s.init_connection_variables()
         self.fake_session_instance.put.side_effect = ConnectionError
         with patch.dict(environ, {"TOKEN_URL": "dummy"}):
             with self.assertRaises(RuntimeError):
-                self.s.report_all_sensors(session, self.c, sensors)
+                self.s.report_all_sensors(session, sensors)
         self.fake_session_instance.put.side_effect = None
         self.fake_put_response.status_code = 200
         with patch.dict(environ, {"TOKEN_URL": "dummy"}):
-            self.s.report_all_sensors(session, self.c, sensors)
+            self.s.report_all_sensors(session, sensors)
 
     @patch('builtins.print')
     def test_run_once(self, _mock_print):

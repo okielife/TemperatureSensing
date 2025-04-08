@@ -45,7 +45,7 @@ from os import getenv
 from ssl import SSLContext
 from struct import unpack_from
 from sys import exit
-from time import localtime, sleep
+from time import localtime, sleep, struct_time
 
 # *** CircuitPython Standard Library Imports
 try:
@@ -87,22 +87,22 @@ class Sensor:
         # noinspection PyUnresolvedReferences
         self.led = DigitalInOut(board.LED)  # Built-in LED
         self.led.direction = Direction.OUTPUT
+        self.clock = RTC()
+        self.clock.datetime = struct_time((1900, 1, 1, 12, 0, 0, 0, 0, -1))
         self.set_extra_hot_ports()
         self.test_mode = False
         self.verbose = True
         self.success = False
 
-    def print(self, message: str, clock: RTC | None = None) -> None:
+    def print(self, message: str) -> None:
         """
         A print wrapper function that formats the output in a structured way with an optional timestamp
         :param message: The message to be printed
-        :param clock: An optional RTC clock, if passed in, it is used to retrieve the time for a time stamp
         :return: None
         """
-        if clock:
-            t = clock.datetime
-            current = f"{t.tm_year}-{t.tm_mon:02d}-{t.tm_mday:02d}-{t.tm_hour:02d}-{t.tm_min:02d}-{t.tm_sec:02d}"
-        else:
+        t = self.clock.datetime
+        current = f"{t.tm_year}-{t.tm_mon:02d}-{t.tm_mday:02d}-{t.tm_hour:02d}-{t.tm_min:02d}-{t.tm_sec:02d}"
+        if t.tm_year < 2000:
             current = "*******************"
         if self.verbose:
             print(f"{current} : {message}")
@@ -191,12 +191,11 @@ class Sensor:
                 p = DigitalInOut(pin)
                 p.switch_to_output(value=True)
 
-    def set_clock_to_cst(self, pool: SocketpoolModuleType, clock: RTC) -> None:
+    def set_clock_to_cst(self, pool: SocketpoolModuleType) -> None:
         """
         Sets the built-in clock to Central Standard Time using the Adafruit NTP pool and NTP protocol.  Only
         accurate down to the second or so, but that's plenty close for our temperature reporting.
         :param pool: The socket pool that was instantiated using init_connection_variables
-        :param clock: The RTC clock instance to be set, which was retrieved from the RTC library
         :return:None
         """
         while True:
@@ -212,49 +211,47 @@ class Sensor:
                 utc_time = transmit_ts - 2208988800  # convert NTP time to Unix time
                 cst_offset = -5 * 60 * 60  # ignores DST I think
                 time_int = utc_time + cst_offset
-                clock.datetime = localtime(time_int)
-                self.print(f"Pico time set to CST: {clock.datetime}", clock)
+                self.clock.datetime = localtime(time_int)
+                self.print(f"Pico time set to CST: {self.clock.datetime}")
                 return
             except Exception as e:  # pragma: no cover
                 # I tried _really_ hard to get this exception.  It's difficult because of the way I am using mock
                 # classes, so it's tough to override things later.  Probably worth revisiting later
-                self.print(f"Encountered an error trying to set time, will try again: {e}", clock)
+                self.print(f"Encountered an error trying to set time, will try again: {e}")
 
-    def get_gpio_port_instance(self, clock: RTC, port_name: str) -> Pin:
+    def get_gpio_port_instance(self, port_name: str) -> Pin:
         """
         Gets a Pin instance for a given port name
-        :param clock: The RTC clock instance that we pass around.
         :param port_name: The name of a port as found in the board code, like "GP1", "GP2"
         :raises RuntimeError: If the port name cannot be retrieved from the board module.
         :return: A microcontroller Pin instance for that port.
         """
-        self.print(f"Attempting to look up pin `{port_name}` in the board module", clock)
+        self.print(f"Attempting to look up pin `{port_name}` in the board module")
         try:
             pin = getattr(board, port_name)
-            self.print("Found it!  Moving on", clock)
+            self.print("Found it!  Moving on")
             return pin
         except AttributeError:
             available_pins = [x for x in dir(board) if not x.startswith('__')]
             raise RuntimeError(f"Could not find port name!  Available names in board are: {available_pins}") from None
 
-    def get_all_sensors_from_env(self, clock: RTC) -> dict[str, DS18X20]:
+    def get_all_sensors_from_env(self) -> dict[str, DS18X20]:
         """
         Gets all sensors to be monitored, as defined in the SENSORS environment variable.
-        :param clock: The RTC clock instance that we pass around.
         :raises RuntimeError: If the SENSORS environment variable is not set, or if a sensor cannot be constructed.
         :return: A dictionary of {sensor ID string : DS18X80 probe instance}
         """
         sensors = {}
-        self.print("Attempting to get all sensors from env", clock)
+        self.print("Attempting to get all sensors from env")
         sensors_string = getenv("SENSORS")
         if not sensors_string:
             raise RuntimeError("Environment variable 'SENSORS' not set")
         sensors_data = sensors_string.strip().split(";")
         for sensor_data in sensors_data:
             sensor_id, gpio_port_name = [x.strip() for x in sensor_data.split(',')]
-            self.print(f"Parsed: ID: {sensor_id}; Looking up the port as {gpio_port_name}", clock)
-            port_var = self.get_gpio_port_instance(clock, gpio_port_name)
-            self.print(f"Got a port name as: {sensor_id}, constructing sensor object", clock)
+            self.print(f"Parsed: ID: {sensor_id}; Looking up the port as {gpio_port_name}")
+            port_var = self.get_gpio_port_instance(gpio_port_name)
+            self.print(f"Got a port name as: {sensor_id}, constructing sensor object")
             if self.test_mode:  # pragma: no cover
                 # not planning on testing this little test mode class
                 class DummySensor:
@@ -269,37 +266,35 @@ class Sensor:
                     # https://github.com/adafruit/Adafruit_CircuitPython_DS18X20/issues/33
                     # noinspection PyTypeChecker
                     sensor = DS18X20(bus, connected_sensors[0])
-                    self.print(f"Successfully constructed sensor {sensor_id} on port {port_var}", clock)
+                    self.print(f"Successfully constructed sensor {sensor_id} on port {port_var}")
                     sensors[sensor_id] = sensor
                 else:
-                    raise RuntimeError(f"Could not construct sensor {sensor_id} on port {port_var}", clock)
-        self.print(f"All sensors found: {[x for x in sensors]}", clock)
+                    raise RuntimeError(f"Could not construct sensor {sensor_id} on port {port_var}")
+        self.print(f"All sensors found: {[x for x in sensors]}")
         return sensors
 
-    def warm_up_temperature_sensors(self, sensors: dict[str, DS18X20], clock) -> None:
+    def warm_up_temperature_sensors(self, sensors: dict[str, DS18X20]) -> None:
         """
         This function loops over the provided sensor dictionary, calling temperature on each to "warm" them up.  When
         you first call .temperature on them, they can report bad values, so this gets that out of the way.
         :param sensors: The dictionary of sensors, as retrieved from get_all_sensors_from_env()
-        :param clock: The RTC clock instance that we pass around.
         :return: None
         """
         for sensor_id, sensor_instance in sensors.items():
             _ = sensor_instance.temperature  # call it once and give it a second to warm it up
             sleep(1)
-            self.print(f"Sensor ID {sensor_id} New Temperature = {sensor_instance.temperature}", clock)
+            self.print(f"Sensor ID {sensor_id} New Temperature = {sensor_instance.temperature}")
 
-    def report_single_sensor(self, clock: RTC, requests: Session, sensor_id: str, sensor: DS18X20, token: str) -> bool:
+    def report_single_sensor(self, requests: Session, sensor_id: str, sensor: DS18X20, token: str) -> bool:
         """
         Reads the current temperature, builds an HTTPS PUT request, and reports this sensor to GitHub
-        :param clock: The RTC clock instance we pass around.
         :param requests: The HTTPS requests instance
         :param sensor_id: The ID of the sensor, such as "Pantry East"
         :param sensor: The associated DS18X20 sensor instance
         :param token: The string GitHub token which write access to the TempSensors repository.
         :return: A boolean, true if successful, false otherwise.
         """
-        t = clock.datetime
+        t = self.clock.datetime
         current = f"{t.tm_year}-{t.tm_mon:02d}-{t.tm_mday:02d}-{t.tm_hour:02d}-{t.tm_min:02d}-{t.tm_sec:02d}"
         file_content = f"""---
 sensor_id: {sensor_id}
@@ -317,20 +312,19 @@ measurement_time: {current}
         try:
             response = requests.put(url, headers=headers, data=dumps(data))
         except (RuntimeError, OSError) as e:
-            self.print(f"Could not send request, reason={e}, skipping this report, checks will continue", clock)
+            self.print(f"Could not send request, reason={e}, skipping this report, checks will continue")
             return False
         if response.status_code in (200, 201):
-            self.print("PUT Complete: File created/updated successfully.", clock)
+            self.print("PUT Complete: File created/updated successfully.")
             return True
         else:
-            self.print(f"PUT Error: {response.text}", clock)
+            self.print(f"PUT Error: {response.text}")
             return False
 
-    def report_all_sensors(self, requests: Session, clock: RTC, sensors: dict[str, DS18X20]) -> None:
+    def report_all_sensors(self, requests: Session, sensors: dict[str, DS18X20]) -> None:
         """
         This function loops over the provided sensor dictionary and reports each one of them to GitHub
         :param requests: The HTTPS requests instance
-        :param clock: The RTC clock instance we pass around.
         :param sensors: The dictionary of sensors, as retrieved from get_all_sensors_from_env()
         :raises RuntimeError: If any of the sensors fail to report
         :return: None
@@ -339,12 +333,12 @@ measurement_time: {current}
         token = self.github_token(requests)
         complete_success = True
         for sensor_id, sensor_instance in sensors.items():
-            success = self.report_single_sensor(clock, requests, sensor_id, sensor_instance, token)
+            success = self.report_single_sensor(requests, sensor_id, sensor_instance, token)
             if not success:
                 complete_success = False
         self.flash_led(5)
         if not complete_success:
-            raise RuntimeError("Could not complete all sensor reporting", clock)
+            raise RuntimeError("Could not complete all sensor reporting")
 
     def run_once(self):
         """
@@ -352,13 +346,12 @@ measurement_time: {current}
         :return: None, just check self.success for the result
         """
         try:
-            clock = RTC()
             pool, requests = self.init_connection_variables()
             self.connect_to_wifi()
-            self.set_clock_to_cst(pool, clock)
-            sensors = self.get_all_sensors_from_env(clock)
-            self.warm_up_temperature_sensors(sensors, clock)
-            self.report_all_sensors(requests, clock, sensors)
+            self.set_clock_to_cst(pool)
+            sensors = self.get_all_sensors_from_env()
+            self.warm_up_temperature_sensors(sensors)
+            self.report_all_sensors(requests, sensors)
             self.success = True
         # not covering all of these exceptions in unit test coverage, each function is tested separately
         except KeyboardInterrupt:  # pragma: no cover
