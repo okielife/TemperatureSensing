@@ -136,6 +136,7 @@ class Sensor:
         """
         This function attempts to connect to known Wi-Fi networks as specified by the WIFI environment variable.
         Note that this function will continue forever attempting to connect as this may happen from time to time.
+        :raises RuntimeError: If WIFI environment variable is not set.
         :return: None
         """
         if radio.ipv4_address:
@@ -164,6 +165,7 @@ class Sensor:
         """
         Retrieves a decoded GitHub token from a specific URL where it is "hidden".
         :param requests: The https requests session
+        :raises RuntimeError: If TOKEN_URL environment variable is not set
         :return: A string GitHub token, probably like "ghp-abc123..."
         """
         github_token_url = getenv('TOKEN_URL')
@@ -222,6 +224,7 @@ class Sensor:
         Gets a Pin instance for a given port name
         :param clock: The RTC clock instance that we pass around.
         :param port_name: The name of a port as found in the board code, like "GP1", "GP2"
+        :raises RuntimeError: If the port name cannot be retrieved from the board module.
         :return: A microcontroller Pin instance for that port.
         """
         self.print(f"Attempting to look up pin `{port_name}` in the board module", clock)
@@ -231,13 +234,13 @@ class Sensor:
             return pin
         except AttributeError:
             available_pins = [x for x in dir(board) if not x.startswith('__')]
-            self.print(f"Could not find port name!  Available names in board are: {available_pins}", clock)
-            raise
+            raise RuntimeError(f"Could not find port name!  Available names in board are: {available_pins}") from None
 
     def get_all_sensors_from_env(self, clock: RTC) -> dict[str, DS18X20]:
         """
         Gets all sensors to be monitored, as defined in the SENSORS environment variable.
         :param clock: The RTC clock instance that we pass around.
+        :raises RuntimeError: If the SENSORS environment variable is not set, or if a sensor cannot be constructed.
         :return: A dictionary of {sensor ID string : DS18X80 probe instance}
         """
         sensors = {}
@@ -322,13 +325,14 @@ measurement_time: {current}
             self.print(f"PUT Error: {response.text}", clock)
             return False
 
-    def report_all_sensors(self, requests: Session, clock: RTC, sensors: dict[str, DS18X20]) -> bool:
+    def report_all_sensors(self, requests: Session, clock: RTC, sensors: dict[str, DS18X20]) -> None:
         """
         This function loops over the provided sensor dictionary and reports each one of them to GitHub
         :param requests: The HTTPS requests instance
         :param clock: The RTC clock instance we pass around.
         :param sensors: The dictionary of sensors, as retrieved from get_all_sensors_from_env()
-        :return: A bool flag, True if all were successful, false otherwise.
+        :raises RuntimeError: If any of the sensors fail to report
+        :return: None
         """
         self.flash_led(4)
         token = self.github_token(requests)
@@ -338,7 +342,8 @@ measurement_time: {current}
             if not success:
                 complete_success = False
         self.flash_led(5)
-        return complete_success
+        if not complete_success:
+            raise RuntimeError("Could not complete all sensor reporting", clock)
 
     def run_once(self):
         """
@@ -360,6 +365,8 @@ measurement_time: {current}
             self.print("Encountered keyboard interrupt, exiting")
         except ConnectionError as e:  # pragma: no cover
             self.print(f"Could not find network with that SSID or failed to connect: {e}")
+        except RuntimeError as e:
+            self.print(f"Runtime error in run() function, reason: {e}")
         except Exception as e:
             self.print(f"Unexpected error in run() function, reason: {e}")
 
