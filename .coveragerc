@@ -3,4 +3,4 @@ source = .
 
 [report]
 omit =
-    */code.py
+    */main.py

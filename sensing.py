@@ -350,7 +350,6 @@ measurement_time: {current}
         Run one sweep of the temperature sensing process, including setting up the network, reading temp, and reporting.
         :return: None, just check self.success for the result
         """
-        # TODO: Think about how different functions return bools and some throw instead...unify this
         try:
             clock = RTC()
             pool, requests = self.init_connection_variables()
@@ -363,11 +362,9 @@ measurement_time: {current}
         # not covering all of these exceptions in unit test coverage, each function is tested separately
         except KeyboardInterrupt:  # pragma: no cover
             self.print("Encountered keyboard interrupt, exiting")
-        except ConnectionError as e:  # pragma: no cover
-            self.print(f"Could not find network with that SSID or failed to connect: {e}")
-        except RuntimeError as e:
+        except RuntimeError as e:  # most issues are propagated through RuntimeErrors
             self.print(f"Runtime error in run() function, reason: {e}")
-        except Exception as e:
+        except Exception as e:  # pragma: no cover
             self.print(f"Unexpected error in run() function, reason: {e}")
 
     def run_loop(self):
