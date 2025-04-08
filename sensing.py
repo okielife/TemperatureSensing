@@ -126,7 +126,8 @@ class Sensor:
         This function initializes the Wi-Fi on the board, and sets up a https request session for subsequent HTTP calls.
         :return: A tuple containing a Socket Pool and a Session.
         """
-        # TODO: Maybe this should just be done in the constructor and pool/requests stored on self?
+        # I thought about doing this in the constructor, but that would make it harder to test because we'd have to
+        # mock all this stuff before calling the constructor.  I think I'll leave it as-is.
         pool: SocketpoolModuleType = get_radio_socketpool(radio)
         ssl_context: SSLContext = get_radio_ssl_context(radio)
         requests: Session = Session(pool, ssl_context)
