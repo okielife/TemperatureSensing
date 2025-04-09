@@ -364,7 +364,7 @@ measurement_time: {current}
     def run_loop(self):
         """
         So this function calls run_once to perform a single full sweep of the sensing process.  However, with this
-        entry point, it will then sleep for a while (40 minutes if it was successful, 10 minutes if it wasn't), and then
+        entry point, it will then sleep for a while (30 minutes if it was successful, 10 minutes if it wasn't), and then
         BOOM hardware resets the whole microcontroller.  The idea is that this function should be called by the
         microcontroller's automatic entry point, so that it will immediately be called right back again.  This avoids
         having to enable hardware watchdogs, and also avoids memory issues if a loop continues for so long and there
@@ -374,10 +374,11 @@ measurement_time: {current}
         self.run_once()
         if self.success:  # success
             # during this time, we'll steadily blink the light 1s on and 1s off
-            data_frequency_minutes = 40
+            data_frequency_minutes = 30
             data_frequency_seconds = data_frequency_minutes * 60
             self.led.value = False
-            for _ in range(data_frequency_seconds):
+            on_off_cycles = data_frequency_seconds // 2  # it's 2 seconds per cycle, so cut the seconds in half
+            for _ in range(on_off_cycles):
                 self.led.value = not self.led.value
                 sleep(2)
             self.led.value = False
@@ -386,7 +387,8 @@ measurement_time: {current}
             failure_sleep_minutes = 10
             failure_sleep_seconds = failure_sleep_minutes * 60
             self.led.value = False
-            for _ in range(failure_sleep_seconds):
+            loop_cycles = failure_sleep_seconds // 3  # each cycle consists of 2 seconds worth of blinking plus 1 sleep
+            for _ in range(loop_cycles):
                 for _ in range(20):
                     self.led.value = not self.led.value
                     sleep(0.1)
