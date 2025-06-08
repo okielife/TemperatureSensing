@@ -23,7 +23,7 @@ jobs:
       run: pip install -r requirements.txt
 
     - name: Run Tests
-      run: coverage run -m pytest test/
+      run: coverage run -m pytest test/ && coverage report
 
     - name: Lint the code
       run: flake8 copier.py main.py sensing.py
