@@ -1,11 +1,12 @@
 from os import environ
 from sys import modules
-from time import localtime, struct_time, strftime
+from time import struct_time
 from types import ModuleType
 from unittest import TestCase
 from unittest.mock import MagicMock, patch
 
 
+@patch('sensing.sleep')
 class TestSensor(TestCase):
     sensor_class: type
 
@@ -47,12 +48,6 @@ class TestSensor(TestCase):
 
         :return: None
         """
-        mock_time = ModuleType('time')
-        mock_time.sleep = MagicMock('sleep')
-        mock_time.localtime = lambda x: localtime(x)
-        mock_time.struct_time = struct_time
-        mock_time.strftime = strftime
-        modules['time'] = mock_time
 
         cls.fake_rtc = ModuleType("rtc")
         cls.fake_rtc.RTC = MagicMock()
@@ -127,14 +122,14 @@ class TestSensor(TestCase):
             if value:  # pragma: no cover
                 environ[name] = value
 
-    def test_init_connection_variables(self):
+    def test_init_connection_variables(self, *_):
         """Check to make sure the function returns pool, session types as returned by the library"""
         socket_pool, session = self.s.init_connection_variables()
         self.assertIsInstance(socket_pool, TestSensor.FakeSocketPool)
         self.assertIsInstance(session, type(self.fake_session_instance))
 
     @patch('builtins.print')
-    def test_connect_to_wifi(self, _mock_print):
+    def test_connect_to_wifi(self, *_):
         # first check if Wi-Fi is already set
         self.fake_wifi.radio.ipv4_address = "1.1.1.1"
         self.s.connect_to_wifi()  # if we made it here, it's fine
@@ -162,7 +157,7 @@ class TestSensor(TestCase):
             self.s.connect_to_wifi()
         self.fake_wifi.radio.connect.side_effect = None
 
-    def test_github_token(self):
+    def test_github_token(self, *_):
         # first what happens if we forgot to set the TOKENS_URL environment variable
         with self.assertRaises(RuntimeError):
             self.s.github_token(self.fake_session_instance)
@@ -180,7 +175,7 @@ class TestSensor(TestCase):
             gh_token = self.s.github_token(self.fake_session_instance)
         self.assertEqual("4321", gh_token)
 
-    def test_set_extra_hot_ports(self):
+    def test_set_extra_hot_ports(self, *_):
         # first be OK if we don't have any defined
         self.s.set_extra_hot_ports()  # should just pass and leave
         # now what if we do have some, but there's a bad one
@@ -192,14 +187,14 @@ class TestSensor(TestCase):
             self.s.set_extra_hot_ports()
 
     @patch('builtins.print')
-    def test_set_clock_to_cst(self, _mock_print):
+    def test_set_clock_to_cst(self, *_):
         c = self.fake_rtc.RTC()
         socket_pool, session = self.s.init_connection_variables()
         self.s.set_clock_to_cst(socket_pool)
         self.assertIsInstance(c.datetime, struct_time)
 
     @patch('builtins.print')
-    def test_get_gpio_port_instance(self, _mock_print):
+    def test_get_gpio_port_instance(self, *_):
         # first call with a good pin name (as defined in the mock above)
         p = self.s.get_gpio_port_instance('GP4')
         self.assertIsInstance(p, TestSensor.FakePin)
@@ -208,7 +203,7 @@ class TestSensor(TestCase):
             self.s.get_gpio_port_instance('ABC')
 
     @patch('builtins.print')
-    def test_get_all_sensors_from_env(self, _mock_print):
+    def test_get_all_sensors_from_env(self, *_):
         # first what if we don't have any defined
         with self.assertRaises(RuntimeError):
             self.s.get_all_sensors_from_env()
@@ -232,14 +227,14 @@ class TestSensor(TestCase):
                 self.assertIsInstance(s, type(self.fake_sensor))
 
     @patch('builtins.print')
-    def test_warm_up_temperature_sensors(self, _mock_print):
+    def test_warm_up_temperature_sensors(self, *_):
         self.fake_bus.scan.return_value = [0]
         with patch.dict(environ, {"SENSORS": "Name1,GP4;Name2,GP12"}):
             sensors = self.s.get_all_sensors_from_env()
         self.s.warm_up_temperature_sensors(sensors)
 
     @patch('builtins.print')
-    def test_report_single_sensor(self, _mock_print):
+    def test_report_single_sensor(self, *_):
         self.fake_bus.scan.return_value = [0]
         with patch.dict(environ, {"SENSORS": "Name1,GP4"}):
             sensors = self.s.get_all_sensors_from_env()
@@ -257,7 +252,7 @@ class TestSensor(TestCase):
         self.assertTrue(b)  # just returns False, doesn't abort
 
     @patch('builtins.print')
-    def test_report_all_sensors(self, _mock_print):
+    def test_report_all_sensors(self, *_):
         self.fake_bus.scan.return_value = [0]
         with patch.dict(environ, {"SENSORS": "Name1,GP4"}):
             sensors = self.s.get_all_sensors_from_env()
@@ -272,7 +267,7 @@ class TestSensor(TestCase):
             self.s.report_all_sensors(session, sensors)
 
     @patch('builtins.print')
-    def test_run_once(self, _mock_print):
+    def test_run_once(self, *_):
         self.fake_bus.scan.return_value = [0]
         with patch.dict(environ,
                         {"SENSORS": "Name1,GP4", "TOKEN_URL": "dummy", "EXTRA_HOTS": "GP4,GP12", "WIFI": "x,y,z"}):
@@ -286,7 +281,7 @@ class TestSensor(TestCase):
         self.assertFalse(s2.success)
 
     @patch('builtins.print')
-    def test_pico_main(self, _mock_print):
+    def test_pico_main(self, *_):
         self.fake_controller.reset.reset_mock()
         self.fake_bus.scan.return_value = [0]
         with patch.dict(environ,
